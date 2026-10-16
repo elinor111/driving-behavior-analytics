@@ -3,6 +3,7 @@ import asyncio
 import json
 import sqlite3
 import time
+import argparse
 
 import numpy as np
 from websockets.asyncio.client import connect
@@ -11,6 +12,7 @@ from websockets.exceptions import ConnectionClosedOK
 from transform import extract_position
 from database import create_tables, save_positions
 
+DB_PATH = "cloud.db"
 
 async def ingest_trip(scenario: str = "calm") -> dict:
     """ Receive point clouds and extract frame positions """
@@ -69,12 +71,34 @@ async def ingest_trip(scenario: str = "calm") -> dict:
 
 
 async def main():
-    scenario = "aggressive"
-    driver_id = 1
+    parser = argparse.ArgumentParser(
+        description="Ingest simulated driving trips into SQLite")
+
+    parser.add_argument(
+        "--scenario",
+        choices=["calm", "mixed", "aggressive"],
+        default="calm",
+        help="Driving scenario to simulate"
+    )
+
+    parser.add_argument(
+        "--driver",
+        type=int,
+        default=1,
+        help="Driver ID"
+    )
+
+    args = parser.parse_args()
+
+    if args.driver <= 0:
+        parser.error("--driver must be a positive integer")
+
+    scenario = args.scenario
+    driver_id = args.driver
 
     result = await ingest_trip(scenario)
 
-    conn = sqlite3.connect("cloud_v2.db")
+    conn = sqlite3.connect(DB_PATH)
 
     try:
         create_tables(conn)
@@ -83,7 +107,8 @@ async def main():
             trip_id = save_positions(
                 conn,
                 driver_id=driver_id,
-                positions=result["positions"]
+                positions=result["positions"],
+                source_scenario=scenario
             )
 
         saved_frames = conn.execute(

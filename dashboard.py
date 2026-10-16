@@ -1,6 +1,7 @@
 import sqlite3 
 import streamlit as st
 import pandas as pd
+import altair as alt
 from pathlib import Path 
 
 DB_PATH = Path(__file__).with_name("cloud.db")
@@ -15,7 +16,7 @@ def load_trips() -> pd.DataFrame:
         trips = pd.read_sql_query(
             """
             SELECT *
-            FROM trips
+            FROM trip_summary
             ORDER BY recorded_at DESC, trip_id DESC
             """,
             conn
@@ -24,7 +25,6 @@ def load_trips() -> pd.DataFrame:
 
     finally:
         conn.close()
-
 
 def load_frame_metrics(trip_id: int) -> pd.DataFrame:
     """ Load time-ordered motion metrics for a selected trip """
@@ -35,14 +35,19 @@ def load_frame_metrics(trip_id: int) -> pd.DataFrame:
         frames = pd.read_sql_query(
             """
             SELECT
-                frame_id,
-                elapsed_sec,
-                speed_mps,
-                acceleration_mps2,
-                lateral_acceleration_mps2
-            FROM frame_metrics
-            WHERE trip_id = ?
-            ORDER BY frame_id
+                p.frame_id,
+                p.elapsed_sec,
+                p.x,
+                p.y,
+                m.speed_mps,
+                m.acceleration_mps2,
+                m.lateral_acceleration_mps2
+            FROM frame_positions AS p
+            JOIN frame_metrics AS m
+              ON m.trip_id = p.trip_id
+             AND m.frame_id = p.frame_id
+            WHERE p.trip_id = ?
+            ORDER BY p.frame_id
             """,
             conn,
             params=(trip_id,)
@@ -52,6 +57,7 @@ def load_frame_metrics(trip_id: int) -> pd.DataFrame:
 
     finally:
         conn.close()
+
 
 def load_driving_events(trip_id: int) -> pd.DataFrame:
     """ Load detected driving events for the selected trip """
@@ -92,13 +98,13 @@ def main():
     trips = load_trips()
 
     if trips.empty:  
-        st.info("No trips found. Run the ETL to save a trip first.")
+        st.info("No analyzed trips found. Run the ingestion and analysis steps first.")
         st.stop()
 
     # Select a driver
     driver_ids = sorted(trips["driver_id"].unique().tolist())
 
-    selected_driver = st.selectbox(
+    selected_driver = st.sidebar.selectbox(
         "Select driver",
         driver_ids
     )
@@ -106,9 +112,59 @@ def main():
     # Show only trips belonging to the selected driver
     driver_trips = trips[trips["driver_id"] == selected_driver]
 
+    view = st.sidebar.radio(
+    "Dashboard View",
+    ["Trip Analysis", "Driving History & Trends"]
+)
+
+    if view == "Driving History & Trends":
+        st.subheader("Driving History & Trends")
+        st.caption("Compare simulated trips for the selected driver")
+
+        history = driver_trips.sort_values("recorded_at").copy()
+
+        history["events_per_km"] = (
+            history["rapid_acceleration_count"]
+            + history["harsh_braking_count"]
+            + history["hard_cornering_count"]
+        ) / (history["distance_m"] / 1000)
+
+        history["trip_label"] = (
+            history["source_scenario"].fillna("Unknown").str.title()
+            + " (#"
+            + history["trip_id"].astype(str)
+            + ")"
+        )
+
+        st.subheader("Driving Score by Trip")
+
+        st.line_chart(
+            history,
+            x="trip_label",
+            y="overall_score",
+            x_label="Trip",
+            y_label="Driving Score"
+        )
+
+        st.subheader("Trip Comparison")
+
+        st.dataframe(
+            history[[
+                "trip_label",
+                "distance_m",
+                "avg_speed_kmh",
+                "overall_score",
+                "events_per_km"
+            ]],
+            hide_index=True,
+            use_container_width=True
+        )
+
+        st.stop()
+
     trip_ids = driver_trips["trip_id"].tolist()
 
-    selected_trip_id = st.selectbox(
+    selected_trip_id = st.sidebar.selectbox(
         "Select trip",
         trip_ids,
         format_func=lambda trip_id: f"Trip #{trip_id}"
@@ -213,6 +269,59 @@ def main():
     st.subheader("Detected Driving Events")
 
     events = load_driving_events(int(selected_trip_id))
+
+    # Plot the stored XY trajectory and approximate event locations.
+    if not frames.empty:
+        st.subheader("Vehicle Trajectory (XY)")
+        st.caption(
+            "Event markers show the closest recorded position to each event midpoint. "
+            "Positions are estimated from point-cloud centroids."
+        )
+
+        path_line = alt.Chart(frames).mark_line(strokeWidth=2).encode(
+            x=alt.X("x:Q", title="X position (m)", scale=alt.Scale(zero=False)),
+            y=alt.Y("y:Q", title="Y position (m)", scale=alt.Scale(zero=False)),
+            order="frame_id:Q",
+            tooltip=[
+                alt.Tooltip("elapsed_sec:Q", title="Time (s)", format=".2f"),
+                alt.Tooltip("x:Q", title="X (m)", format=".2f"),
+                alt.Tooltip("y:Q", title="Y (m)", format=".2f"),
+            ],
+        )
+        trajectory_chart = path_line
+
+        if not events.empty:
+            event_locations = events.copy()
+            event_locations["event_time_sec"] = (
+                event_locations["start_time_sec"]
+                + event_locations["end_time_sec"]
+            ) / 2.0
+
+            event_locations = pd.merge_asof(
+                event_locations.sort_values("event_time_sec"),
+                frames[["elapsed_sec", "x", "y"]].sort_values("elapsed_sec"),
+                left_on="event_time_sec",
+                right_on="elapsed_sec",
+                direction="nearest",
+            )
+
+            event_markers = alt.Chart(event_locations).mark_circle(size=130).encode(
+                x="x:Q",
+                y="y:Q",
+                color=alt.Color("event_type:N", title="Event type"),
+                tooltip=[
+                    alt.Tooltip("event_type:N", title="Event"),
+                    alt.Tooltip("start_time_sec:Q", title="Start (s)", format=".2f"),
+                    alt.Tooltip("end_time_sec:Q", title="End (s)", format=".2f"),
+                    alt.Tooltip("peak_value:Q", title="Peak (m/s²)", format=".2f"),
+                ],
+            )
+            trajectory_chart = path_line + event_markers
+
+        st.altair_chart(
+            trajectory_chart.properties(height=440).interactive(),
+            use_container_width=True,
+        )
 
     event_col1, event_col2, event_col3 = st.columns(3)
 

@@ -13,11 +13,22 @@ def create_tables(conn: sqlite3.Connection) -> None:
             trip_id INTEGER PRIMARY KEY,
             driver_id INTEGER NOT NULL,
             recorded_at TEXT NOT NULL,
+            source_scenario TEXT,
             status TEXT NOT NULL DEFAULT 'ingested'
                 CHECK (status IN ('ingested', 'analyzed', 'failed')),
             error_code TEXT
         )
     """)
+
+    existing_columns = {
+    row[1]
+    for row in conn.execute("PRAGMA table_info(trips)")
+    }
+
+    if "source_scenario" not in existing_columns:
+        conn.execute(
+            "ALTER TABLE trips ADD COLUMN source_scenario TEXT"
+        )
 
     conn.execute("""
         CREATE TABLE IF NOT EXISTS frame_positions (
@@ -63,7 +74,12 @@ def create_tables(conn: sqlite3.Connection) -> None:
     """)
 
 
-def save_positions(conn: sqlite3.Connection, driver_id: int, positions: list[dict]) -> int:
+def save_positions(
+    conn: sqlite3.Connection,
+    driver_id: int,
+    positions: list[dict],
+    source_scenario: str | None = None
+) -> int:
     """ Save a complete trip's extracted positions """
 
     if not positions:
@@ -71,10 +87,10 @@ def save_positions(conn: sqlite3.Connection, driver_id: int, positions: list[dic
 
     cursor = conn.execute(
         """
-        INSERT INTO trips (driver_id, recorded_at, status)
-        VALUES (?, ?, 'ingested')
+        INSERT INTO trips (driver_id, recorded_at, source_scenario, status)
+        VALUES (?, ?, ?, 'ingested')
         """,
-        (driver_id, datetime.now(timezone.utc).isoformat())
+        (driver_id, datetime.now(timezone.utc).isoformat(), source_scenario)
     )
 
     trip_id = cursor.lastrowid

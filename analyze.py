@@ -8,7 +8,7 @@ from database import create_tables
 from transform import EventDetector, MotionProcessor, TripAnalyzer
 from sql_views import create_views
 
-DB_PATH = Path(__file__).with_name("cloud_v2.db")
+DB_PATH = Path(__file__).with_name("cloud.db")
 
 
 def calculate_kinematics(conn: sqlite3.Connection, trip_id: int) -> list[tuple]:
