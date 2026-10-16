@@ -1,10 +1,12 @@
 import argparse
 import sqlite3
+import sys
 from pathlib import Path
 
 import numpy as np
 
 from database import create_tables
+from errors import PipelineError
 from transform import EventDetector, MotionProcessor, TripAnalyzer
 from sql_views import create_views
 
@@ -19,7 +21,13 @@ def calculate_kinematics(conn: sqlite3.Connection, trip_id: int) -> list[tuple]:
         (trip_id,),
     ).fetchall()
     if not rows:
-        raise ValueError(f"No stored positions for trip {trip_id}")
+        raise PipelineError("VL-201", f"No stored positions for trip {trip_id}")
+
+    timestamps = [row[1] for row in rows]
+    if any(not np.isfinite(t) for t in timestamps) or any(
+        later <= earlier for earlier, later in zip(timestamps, timestamps[1:])
+    ):
+        raise PipelineError("VL-202", f"Non-increasing or invalid timestamps for trip {trip_id}")
 
     processor = MotionProcessor()
     metric_rows = []
@@ -36,7 +44,7 @@ def calculate_kinematics(conn: sqlite3.Connection, trip_id: int) -> list[tuple]:
 def detect_driving_events(metric_rows: list[tuple], trip_id: int) -> tuple[list[tuple], dict]:
     """Detect events and calculate the summary from time-ordered motion metrics."""
     if not metric_rows:
-        raise ValueError(f"No motion metrics for trip {trip_id}")
+        raise PipelineError("VL-203", f"No motion metrics for trip {trip_id}")
 
     detector = EventDetector()
     analyzer = TripAnalyzer(trip_id=str(trip_id))
@@ -76,11 +84,27 @@ def load_stored_metrics(conn: sqlite3.Connection, trip_id: int) -> list[tuple]:
         "SELECT COUNT(*) FROM frame_positions WHERE trip_id = ?", (trip_id,)
     ).fetchone()[0]
     if not expected or len(rows) != expected:
-        raise ValueError(
+        raise PipelineError(
+            "VL-203",
             f"Trip {trip_id}: expected {expected} metrics, found {len(rows)}. "
             "Run full analysis first."
         )
+    timestamps = [row[2] for row in rows]
+    if any(not np.isfinite(t) for t in timestamps) or any(
+        later <= earlier for earlier, later in zip(timestamps, timestamps[1:])
+    ):
+        raise PipelineError("VL-202", f"Non-increasing or invalid timestamps for trip {trip_id}")
     return rows
+
+
+def mark_trip_failed(conn: sqlite3.Connection, trip_id: int, code: str) -> None:
+    """Persist a failure for an existing trip after prior writes are rolled back."""
+    conn.rollback()
+    with conn:
+        conn.execute(
+            "UPDATE trips SET status = 'failed', error_code = ? WHERE trip_id = ?",
+            (code, trip_id),
+        )
 
 
 def analyze_trip(conn: sqlite3.Connection, trip_id: int, events_only: bool = False) -> dict:
@@ -129,8 +153,9 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    conn = sqlite3.connect(DB_PATH)
+    conn = None
     try:
+        conn = sqlite3.connect(DB_PATH)
         create_tables(conn)
         create_views(conn)
         summary = analyze_trip(conn, args.trip, events_only=args.events_only)
@@ -141,8 +166,25 @@ def main() -> None:
             "SELECT COUNT(*) FROM driving_events WHERE trip_id = ?", (args.trip,)
         ).fetchone()[0]
         print(f"Detected events: {count}")
+    except PipelineError as error:
+        print(error, file=sys.stderr)
+        if conn is not None:
+            try:
+                mark_trip_failed(conn, args.trip, error.code)
+            except sqlite3.Error as db_error:
+                print(f"[VL-301] Could not record failure: {db_error}", file=sys.stderr)
+        raise SystemExit(1)
+    except sqlite3.Error as error:
+        print(f"[VL-301] Database operation failed: {error}", file=sys.stderr)
+        if conn is not None:
+            try:
+                mark_trip_failed(conn, args.trip, "VL-301")
+            except sqlite3.Error as db_error:
+                print(f"[VL-301] Could not record failure: {db_error}", file=sys.stderr)
+        raise SystemExit(1)
     finally:
-        conn.close()
+        if conn is not None:
+            conn.close()
 
 
 if __name__ == "__main__":

@@ -1,0 +1,8 @@
+
+class PipelineError(Exception):
+    """ An expected pipeline failure with a stable error code """
+
+    def __init__(self, code: str, message: str):
+        self.code = code
+        self.message = message
+        super().__init__(f"[{code}] {message}")

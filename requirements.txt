@@ -4,4 +4,4 @@ websockets==17.2
 numpy==2.5.4
 pandas==3.0.6
 streamlit==1.66.0
-altair
+altair==6.3.0

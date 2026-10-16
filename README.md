@@ -1,98 +1,142 @@
 # Vehicle Location Analytics
 
-## Project Overview
-
-A data engineering pipeline for processing
-simulated vehicle location data.
+A data pipeline that transforms simulated vehicle-location (VL) point clouds into driving behavior insights. It includes a WebSocket source, ingestion and analysis stages, a SQLite warehouse, and a Streamlit dashboard.
 
 ## Proposed Use Cases
-The following use cases explore how vehicle location (VL) data can be transformed into meaningful insights for drivers, transportation services, and road infrastructure management: 
 
-### 1. Driving Behavior Analytics — Selected Use Case
-A system that analyzes vehicle movement patterns to evaluate driving behavior and provide feedback after each trip. By tracking changes in position over time, the system can calculate metrics such as average and maximum speed, acceleration, harsh braking, and sharp turns.
-
-Potential users: Insurance companies offering usage-based insurance, individual drivers and fleet management companies.
-
-Data requirements: A sequence of timestamped vehicle locations across a trip. Multiple trips would allow the system to compare driving behavior over time.
-
-The product could generate an explainable driving score, highlighting the events that contributed to the score. This could help drivers improve their driving habits, fleet managers monitor driving behavior, and insurance companies assess driving patterns for usage-based insurance programs.
+### 1. Driving Behavior Analytics — Implemented
+Estimate speed and acceleration from timestamped positions, detect harsh braking, rapid acceleration and hard cornering, and compare trips using an explainable driving score. Potential users include drivers and fleet managers.
 
 ### 2. Road Health Intelligence
-A system designed to identify potential road surface anomalies, such as potholes, speed bumps, and uneven road sections, by analyzing unusual changes in the vehicle's vertical (Z-axis) movement.
-
-Potential users: Municipalities, road maintenance authorities, and transportation infrastructure companies.
-
-Data requirements: Vehicle location data that captures vertical movement. Combining observations from multiple trips and vehicles could help distinguish persistent road surface anomalies from temporary obstacles, such as objects left on the road, as well as isolated vehicle movements or measurement noise.
-
-The system could highlight suspicious road segments and help prioritize areas for inspection and maintenance.
+Detect potential potholes and uneven road segments from unusual vertical (Z-axis) motion across multiple drives. Potential users include municipalities and road maintenance teams.
 
 ### 3. Route Pattern Discovery
-A system that analyzes historical vehicle trajectories to identify frequently visited destinations, recurring routes, and regular travel patterns.
-
-Potential users: Navigation applications, transportation services, and individual drivers.
-
-Data requirements: Historical location data from multiple trips, including trip identifiers and timestamps. Additional map data could provide geographical context.
-
-The system could identify common journeys, such as daily commutes, and support personalized route suggestions and travel insights.
+Identify recurring routes, destinations and travel patterns from historical vehicle trajectories. Potential users include navigation and transportation services.
 
 ### 4. Intersection Risk Analyzer
-A system that identifies potentially problematic intersections and road segments by analyzing recurring driving events, such as sudden braking, sharp turns, and unusual speed changes at specific locations.
+Find locations with recurring harsh braking and turning events to help prioritize further road-safety investigations. Potential users include transportation authorities.
 
-Potential users: Transportation authorities, urban planners, and road safety organizations.
+## Implemented Product
 
-Data requirements: Aggregated location data from multiple vehicles and trips, allowing driving behavior to be compared across the same intersections and road segments.
+The system extracts each frame's 3D centroid, calculates motion from consecutive XY positions, and detects three event types: **rapid acceleration, harsh braking, and hard cornering**. Event detection uses **hysteresis** (entry threshold 3.0 m/s²; exit threshold 2.95 m/s²) to group consecutive qualifying frames into events.
 
-The system could identify locations with unusually frequent driving events and help prioritize areas for further safety investigation.
+Each trip includes distance, duration, average and maximum speed, event counts, and an illustrative driving score. For each event category:
 
+```text
+category_score = 100 * max(0, 1 - events_per_km / 5)
+overall_score = mean(acceleration_score, braking_score, cornering_score)
+```
 
-## Selected Use Case
-## Driving Behavior Metrics
+Scores are not assigned to trips shorter than 500 m. The score measures **event frequency per kilometer**, not event severity or real-world accident risk.
 
-The selected use case analyzes vehicle movement to identify driving patterns and provide an explainable score for each trip.
+## Architecture and Design
 
-### Trip Statistics
+```text
+motion.py / generator.py → FastAPI WebSocket (main.py)
+                                  ↓
+                         ingest.py (centroids)
+                                  ↓
+                      SQLite: trips, frame_positions
+                                  ↓
+                    analyze.py (motion + events)
+                                  ↓
+                 SQLite: frame_metrics, driving_events
+                                  ↓
+                         SQL view: trip_summary
+                                  ↓
+                       Streamlit (dashboard.py)
+```
 
-- **Total Distance:** Total horizontal distance traveled during the trip.
-- **Trip Duration:** Time elapsed between the first and last frame.
-- **Average Speed:** Total distance divided by trip duration.
-- **Maximum Speed:** Highest estimated speed recorded during the trip.
+A frame contains roughly one million 3D points. Rather than storing entire clouds, ingestion retains a compact position per frame. The separate `frame_metrics` table stores calculated speed, heading and acceleration; `driving_events` stores event intervals and peak values. The `trips` table records driver, scenario provenance and processing status. `trip_summary` provides queryable trip statistics and scores.
 
-### Driving Events
-
-- **Rapid Acceleration:** Detected when longitudinal acceleration exceeds a predefined positive threshold.
-- **Harsh Braking:** Detected when longitudinal acceleration falls below a predefined negative threshold.
-- **Hard Cornering:** Detected when lateral acceleration exceeds a predefined threshold.
-
-Consecutive frames exceeding the same threshold will be grouped into a single event rather than counted separately.
-
-### Driving Score
-
-Each trip will receive an explainable driving behavior score based on detected events and their severity.
-Event counts will be normalized by distance traveled to enable more meaningful comparisons between trips of different lengths.
-A minimum trip distance will be required to generate a score, avoiding unstable results for very short trips.
-Thresholds and scoring weights will initially be configurable and defined for simulation purposes rather than treated as validated safety standards.
-
-### Assumptions
-
-- Vehicle movement is represented by timestamped 3D point clouds.
-- Driving behavior metrics are calculated using horizontal (X, Y) motion.
-- The simulation assumes a primarily flat road surface.
-- The score describes observed driving behavior rather than predicting accident risk.
-
-## Architecture
-**Point Cloud Rotation:** The initial implementation models vehicle movement through translation of the point cloud, without rotating it. Since driving behavior metrics are derived from changes in the cloud's center position over time, rotation is not required for the selected use case. Vehicle heading is modeled separately to support curved trajectories.
-
-To be defined.
+This separation allows reanalysis from stored positions without replaying point clouds. `--events-only` re-detects events from stored motion metrics without recalculating kinematics. The mock cloud translates without rotating; horizontal motion drives the current metrics, while Z positions are retained.
 
 ## Setup and Usage
 
-To be defined.
+Run the commands from the project directory. On Windows PowerShell:
 
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt
+```
 
+**1. Start the source server** (keep this terminal open):
 
-## Release Notes
+```powershell
+python -m uvicorn main:app --reload
+```
 
-# Coming soon:
-**Speed Limit Compliance:** Integrate road-specific speed limit data to detect speeding violations and incorporate them into the driving behavior score. This feature is excluded from the initial implementation, as vehicle location data alone does not provide the road's legal speed limit.
+**2. Ingest trips** in another terminal:
 
-**3D Motion Analysis:** Extend driving behavior metrics to account for vertical (Z-axis) movement, enabling more accurate analysis on sloped or uneven roads. The initial implementation assumes a primarily flat road surface and calculates acceleration and cornering metrics using horizontal (X, Y) motion only, while preserving the Z-axis data for future extensions.
+```powershell
+python ingest.py --scenario calm --driver 1
+python ingest.py --scenario mixed --driver 1
+python ingest.py --scenario aggressive --driver 2
+```
+
+**3. Analyze** the trip IDs returned by ingestion (for a fresh database, they are 1, 2 and 3):
+
+```powershell
+python analyze.py --trip 1
+python analyze.py --trip 2
+python analyze.py --trip 3
+```
+
+To recalculate events after changing thresholds:
+
+```powershell
+python analyze.py --trip 3 --events-only
+```
+
+**4. Open the dashboard:**
+
+```powershell
+streamlit run dashboard.py
+```
+
+The dashboard provides **Trip Analysis** (metrics, plots, events and XY trajectory) and **Driving History & Trends** (trip comparison). Data is stored in a local `cloud.db`, created during ingestion.
+
+## Error Codes
+
+Expected pipeline failures produce a clear error code and a non-zero process exit status.
+
+| Code | Description |
+| --- | --- |
+| `VL-101` | Cannot connect to the WebSocket source |
+| `VL-102` | Stream interrupted or closed mid-frame |
+| `VL-103` | Invalid frame metadata, sequence or payload |
+| `VL-104` | No frames received |
+| `VL-201` | Requested trip has no stored positions |
+| `VL-202` | Invalid or non-increasing frame timestamps |
+| `VL-203` | Missing or incomplete metrics for event-only analysis |
+| `VL-301` | SQLite operation failed |
+
+An ingestion failure before persistence produces a CLI error without creating a trip. During analysis, failures for an existing trip can be recorded as `status='failed'` with an `error_code`.
+
+## Release Notes — Current Prototype
+
+**Product:** End-to-end vehicle-location analytics with simulated point-cloud streaming, reprocessable trip data, event detection and an interactive BI dashboard.
+
+**Usage:** Follow *Setup and Usage* above to generate, analyze and compare trips.
+
+**Known issues:** A normally closed stream does not currently provide an explicit end-of-trip completeness marker. Position-based derivatives are sensitive to numerical noise near thresholds. Scores and thresholds are illustrative, and Python and SQL score implementations should be kept consistent. Automated ground-truth tests are not yet included.
+
+**Coming soon:** Automated validation against simulator ground truth, stronger stream-completeness checks, speed-limit context and analysis of vertical (Z-axis) motion.
+
+## LLM Usage
+
+**Tool/model:** OpenAI ChatGPT (GPT-6).
+
+ChatGPT was used as a technical assistant during development: exploring implementation options, reviewing code, clarifying Python/SQLite/WebSocket behavior, and debugging integration issues. The development process involved comparing design alternatives, running the implementation locally, inspecting outputs, and refining the solution based on observed behavior.
+
+**Representative main prompts:**
+
+- How can dense VL point-cloud data be reduced into a compact, queryable data warehouse?
+- How should ingestion, kinematic calculations and event detection be separated to support reprocessing?
+- How can hysteresis stabilize event detection, and how should threshold-boundary cases be handled?
+- How can trip statistics be calculated in SQLite and checked against Python results?
+- How should pipeline error codes and failure handling be implemented?
+- How can Streamlit present trip metrics and comparisons clearly?
+
+The resulting design choices and behavior were reviewed through local execution and debugging; automated regression and ground-truth validation are planned.
