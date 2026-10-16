@@ -125,15 +125,18 @@ def calculate_driving_scores(rapid_count: int, braking_count: int, cornering_cou
         "overall_score": s_overall}
 
 
+
 class MotionProcessor:
+    """ Calculate motion metrics from consecutive vehicle positions """
+
     def __init__(self):
         self.previous_position = None
         self.previous_timestamp = None
         self.previous_speed = None
         self.previous_heading = None
 
-    def process_frame(self, cloud: np.ndarray, timestamp: float) -> dict:
-        position = extract_position(cloud)
+    def process_position(self, position: np.ndarray, timestamp: float) -> dict:
+        """ Calculate speed, acceleration, and direction from the current position and previous motion data """
 
         speed = None
         acceleration = None
@@ -142,29 +145,43 @@ class MotionProcessor:
 
         if self.previous_position is not None:
             dt = timestamp - self.previous_timestamp
+
             speed = calculate_speed(self.previous_position, position, self.previous_timestamp, timestamp)
+
             heading = calculate_heading(self.previous_position, position)
 
-        if self.previous_speed is not None and speed is not None:
-            acceleration = calculate_acceleration(self.previous_speed, speed, dt)
+            if self.previous_speed is not None:
+                acceleration = calculate_acceleration(self.previous_speed, speed, dt)
 
-        if self.previous_heading is not None and heading is not None:
-            lateral_acceleration = calculate_lateral_acceleration(self.previous_heading, heading, speed, dt)
+            if self.previous_heading is not None:
+                lateral_acceleration = calculate_lateral_acceleration(self.previous_heading, heading, speed, dt)
 
-        # save current state for the next frame
-        self.previous_position = position
+        self.previous_position = position.copy()
         self.previous_timestamp = timestamp
         self.previous_speed = speed
         self.previous_heading = heading
 
         return {
-        "timestamp": timestamp,
-        "x": float(position[0]),
-        "y": float(position[1]),
-        "speed": speed,
-        "acceleration": acceleration,
-        "heading": heading,
-        "lateral_acceleration": lateral_acceleration}
+            "timestamp": timestamp,
+            "speed": speed,
+            "acceleration": acceleration,
+            "heading": heading,
+            "lateral_acceleration": lateral_acceleration
+        }
+
+    def process_frame(self, cloud: np.ndarray, timestamp: float) -> dict:
+        """ Compatibility wrapper for processing a raw point cloud """
+
+        position = extract_position(cloud)
+        metrics = self.process_position(position, timestamp)
+
+        return {
+            **metrics,
+            "x": float(position[0]),
+            "y": float(position[1]),
+            "z": float(position[2])
+        }
+
 
 
 class EventDetector:

@@ -1,28 +1,23 @@
+
 import asyncio
 import json
-import time
-import numpy as np
 import sqlite3
+import time
 
+import numpy as np
 from websockets.asyncio.client import connect
 from websockets.exceptions import ConnectionClosedOK
 
-from transform import MotionProcessor, EventDetector, TripAnalyzer
-from database import create_tables, save_trip
+from transform import extract_position
+from database import create_tables, save_positions
 
 
-async def process_trip(scenario: str = "calm") -> dict:
-    """ Process one complete trip streamed from the WebSocket API """
+async def ingest_trip(scenario: str = "calm") -> dict:
+    """ Receive point clouds and extract frame positions """
 
     url = f"ws://127.0.0.1:8000/cloud?scenario={scenario}"
 
-    motion_processor = MotionProcessor()
-    event_detector = EventDetector()
-    trip_analyzer = TripAnalyzer(trip_id=f"{scenario}_trip")
-
-    frame_count = 0
-    frame_metrics = []
-
+    positions = []
     start = time.perf_counter()
 
     async with connect(
@@ -30,112 +25,83 @@ async def process_trip(scenario: str = "calm") -> dict:
         max_size=None,
         compression=None,
         ping_interval=60,
-        ping_timeout=60,
+        ping_timeout=60
     ) as websocket:
 
         while True:
             try:
                 metadata_message = await websocket.recv()
-
             except ConnectionClosedOK:
-                # Normal end of stream, between complete frames
                 break
 
             metadata = json.loads(metadata_message)
-            # Once metadata is received, the binary payload must follow
             binary = await websocket.recv()
-            
 
-            cloud = np.frombuffer(binary, dtype=np.dtype(metadata["dtype"])).reshape(metadata["shape"])
+            cloud = np.frombuffer(
+                binary,
+                dtype=np.dtype(metadata["dtype"])
+            ).reshape(metadata["shape"])
 
-            # 1. Extract motion metrics and store them with the frame metadata
-            metrics = motion_processor.process_frame(cloud, metadata["timestamp"])
-            frame_metrics.append({"frame_id": metadata["frame_id"], **metrics})
+            position = extract_position(cloud)
 
-            # 2. Detect driving events
-            event_detector.process_frame(metrics)
+            positions.append({
+                "frame_id": metadata["frame_id"],
+                "timestamp": metadata["timestamp"],
+                "x": float(position[0]),
+                "y": float(position[1]),
+                "z": float(position[2])
+            })
 
-            # 3. Accumulate trip statistics
-            trip_analyzer.process_frame(metrics)
-
-            frame_count += 1
-
-            if frame_count % 100 == 0:
-                print(f"Processed {frame_count} frames...")
-
-    # Close any events still active at the end of the trip
-    event_detector.finalize()
-
-    # Generate summary using the detected events
-    summary = trip_analyzer.get_summary(event_detector.events)
+            if len(positions) % 100 == 0:
+                print(f"Received {len(positions)} frames...")
 
     elapsed = time.perf_counter() - start
 
-    print(f"\nProcessed {frame_count} frames in {elapsed:.2f} seconds")
-    print(f"Average processing rate: {frame_count / elapsed:.2f} FPS")
+    print(f"\nReceived {len(positions)} frames in {elapsed:.2f} seconds")
+
+    if not positions:
+        raise ValueError("No frames received")
 
     return {
-        "summary": summary,
-        "events": event_detector.events,
-        "frame_metrics": frame_metrics,
-        "frame_count": frame_count
+        "positions": positions,
+        "frame_count": len(positions)
     }
 
 
 async def main():
     scenario = "aggressive"
-    result = await process_trip(scenario)
+    driver_id = 1
 
-    conn = sqlite3.connect("cloud.db")
+    result = await ingest_trip(scenario)
+
+    conn = sqlite3.connect("cloud_v2.db")
 
     try:
         create_tables(conn)
 
-        # Save the complete trip as one transaction.
-        # Any insertion failure rolls back all trip data.
         with conn:
-            trip_id = save_trip(
+            trip_id = save_positions(
                 conn,
-                result,
-                driver_id=1,
-                scenario=scenario
+                driver_id=driver_id,
+                positions=result["positions"]
             )
 
-        print(f"Trip {trip_id} saved successfully!")
-
-        trip_count = conn.execute(
-            "SELECT COUNT(*) FROM trips WHERE trip_id = ?",
+        saved_frames = conn.execute(
+            """
+            SELECT COUNT(*)
+            FROM frame_positions
+            WHERE trip_id = ?
+            """,
             (trip_id,)
         ).fetchone()[0]
 
-        frame_count = conn.execute(
-            "SELECT COUNT(*) FROM frame_metrics WHERE trip_id = ?",
-            (trip_id,)
-        ).fetchone()[0]
+        assert saved_frames == result["frame_count"]
 
-        event_count = conn.execute(
-            "SELECT COUNT(*) FROM driving_events WHERE trip_id = ?",
-            (trip_id,)
-        ).fetchone()[0]
-
-        print(f"DB verification: {trip_count} trip, {frame_count} frames, {event_count} events")
-
-        assert trip_count == 1
-        assert frame_count == result["frame_count"]
-        assert event_count == len(result["events"])
-
+        print(f"Trip {trip_id} saved successfully")
+        print(f"Verified {saved_frames} stored positions")
 
     finally:
         conn.close()
-
-    print("\n--- TRIP SUMMARY ---")
-    print(json.dumps(result["summary"], indent=2))  
-
-    print("\n--- DETECTED EVENTS ---")
-    print(f"Total events: {len(result['events'])}")
-
-    for event in result["events"][:10]:
-        print(event)
 
 
 if __name__ == "__main__":
