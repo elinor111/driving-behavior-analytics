@@ -7,14 +7,14 @@ import numpy as np
 
 from database import create_tables
 from errors import PipelineError
-from transform import EventDetector, MotionProcessor, TripAnalyzer
+from transform import EventDetector, MotionProcessor
 from sql_views import create_views
 
 DB_PATH = Path(__file__).with_name("cloud.db")
 
 
 def calculate_kinematics(conn: sqlite3.Connection, trip_id: int) -> list[tuple]:
-    """Compute frame metrics from saved positions, without writing to the DB."""
+    """ Compute frame metrics from saved positions, without writing to the DB """
     rows = conn.execute(
         """SELECT frame_id, elapsed_sec, x, y, z
            FROM frame_positions WHERE trip_id = ? ORDER BY frame_id""",
@@ -41,13 +41,12 @@ def calculate_kinematics(conn: sqlite3.Connection, trip_id: int) -> list[tuple]:
     return metric_rows
 
 
-def detect_driving_events(metric_rows: list[tuple], trip_id: int) -> tuple[list[tuple], dict]:
-    """Detect events and calculate the summary from time-ordered motion metrics."""
+def detect_driving_events(metric_rows: list[tuple], trip_id: int) -> list[tuple]:
+    """ Detect events from time-ordered motion metrics """
     if not metric_rows:
         raise PipelineError("VL-203", f"No motion metrics for trip {trip_id}")
 
     detector = EventDetector()
-    analyzer = TripAnalyzer(trip_id=str(trip_id))
 
     for _, _, timestamp, speed, heading, acceleration, lateral_acceleration in metric_rows:
         metrics = {
@@ -58,19 +57,18 @@ def detect_driving_events(metric_rows: list[tuple], trip_id: int) -> tuple[list[
             "lateral_acceleration": lateral_acceleration,
         }
         detector.process_frame(metrics)
-        analyzer.process_frame(metrics)
 
     detector.finalize()
-    summary = analyzer.get_summary(detector.events)
     event_rows = [
         (trip_id, e["type"], e["start_time"], e["end_time"], e["peak_value"])
         for e in detector.events
     ]
-    return event_rows, summary
+    return event_rows
 
 
 def load_stored_metrics(conn: sqlite3.Connection, trip_id: int) -> list[tuple]:
-    """Read previously calculated metrics; do not recompute kinematics."""
+    """ Read previously calculated metrics, do not recompute kinematics """
+
     rows = conn.execute(
         """SELECT m.trip_id, m.frame_id, p.elapsed_sec, m.speed_mps,
                   m.heading, m.acceleration_mps2, m.lateral_acceleration_mps2
@@ -98,7 +96,7 @@ def load_stored_metrics(conn: sqlite3.Connection, trip_id: int) -> list[tuple]:
 
 
 def mark_trip_failed(conn: sqlite3.Connection, trip_id: int, code: str) -> None:
-    """Persist a failure for an existing trip after prior writes are rolled back."""
+    """ Persist a failure for an existing trip after prior writes are rolled back """
     conn.rollback()
     with conn:
         conn.execute(
@@ -108,13 +106,13 @@ def mark_trip_failed(conn: sqlite3.Connection, trip_id: int, code: str) -> None:
 
 
 def analyze_trip(conn: sqlite3.Connection, trip_id: int, events_only: bool = False) -> dict:
-    """Run full analysis, or detect events from previously stored frame metrics."""
+    """ Run full analysis, or detect events from previously stored frame metrics """
     if events_only:
         metric_rows = load_stored_metrics(conn, trip_id)
     else:
         metric_rows = calculate_kinematics(conn, trip_id)
 
-    event_rows, summary = detect_driving_events(metric_rows, trip_id)
+    event_rows = detect_driving_events(metric_rows, trip_id)
 
     with conn:
         if not events_only:
@@ -141,7 +139,11 @@ def analyze_trip(conn: sqlite3.Connection, trip_id: int, events_only: bool = Fal
             "UPDATE trips SET status = 'analyzed', error_code = NULL WHERE trip_id = ?",
             (trip_id,),
         )
-    return summary
+    # Use the same SQL summary and scores as the dashboard
+    cursor = conn.execute(
+        "SELECT * FROM trip_summary WHERE trip_id = ?", (trip_id,)
+    )
+    return dict(zip((column[0] for column in cursor.description), cursor.fetchone()))
 
 
 def main() -> None:

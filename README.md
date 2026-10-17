@@ -18,7 +18,7 @@ Find locations with recurring harsh braking and turning events to help prioritiz
 
 ## Implemented Product
 
-The system extracts each frame's 3D centroid, calculates motion from consecutive XY positions, and detects three event types: **rapid acceleration, harsh braking, and hard cornering**. Event detection uses **hysteresis** (entry threshold 3.0 m/s²; exit threshold 2.95 m/s²) to group consecutive qualifying frames into events.
+The system extracts each frame's 3D centroid, calculates motion from consecutive XY positions, and detects three event types: **rapid acceleration, harsh braking, and hard cornering**. Event detection uses **hysteresis** (entry threshold 3.0 m/s², exit threshold 2.95 m/s²) to group consecutive qualifying frames into events.
 
 Each trip includes distance, duration, average and maximum speed, event counts, and an illustrative driving score. For each event category:
 
@@ -27,7 +27,7 @@ category_score = 100 * max(0, 1 - events_per_km / 5)
 overall_score = mean(acceleration_score, braking_score, cornering_score)
 ```
 
-Scores are not assigned to trips shorter than 500 m. The score measures **event frequency per kilometer**, not event severity or real-world accident risk.
+Scores are not assigned to trips shorter than 500 m. The score measures **event frequency per kilometer**, not event severity.
 
 ## Architecture and Design
 
@@ -47,9 +47,9 @@ motion.py / generator.py → FastAPI WebSocket (main.py)
                        Streamlit (dashboard.py)
 ```
 
-A frame contains roughly one million 3D points. Rather than storing entire clouds, ingestion retains a compact position per frame. The separate `frame_metrics` table stores calculated speed, heading and acceleration; `driving_events` stores event intervals and peak values. The `trips` table records driver, scenario provenance and processing status. `trip_summary` provides queryable trip statistics and scores.
+A frame contains roughly one million 3D points. Rather than storing entire clouds, ingestion retains a compact position per frame. The separate `frame_metrics` table stores calculated speed, heading and acceleration. `driving_events` stores event intervals and peak values. The `trips` table records driver, scenario provenance and processing status. `trip_summary` provides queryable trip statistics and scores.
 
-This separation allows reanalysis from stored positions without replaying point clouds. `--events-only` re-detects events from stored motion metrics without recalculating kinematics. The mock cloud translates without rotating; horizontal motion drives the current metrics, while Z positions are retained.
+This separation allows reanalysis from stored positions without replaying point clouds. `--events-only` re-detects events from stored motion metrics without recalculating kinematics. The mock cloud translates without rotating, horizontal motion drives the current metrics, while Z positions are retained.
 
 ## Setup and Usage
 
@@ -120,7 +120,7 @@ An ingestion failure before persistence produces a CLI error without creating a 
 
 **Usage:** Follow *Setup and Usage* above to generate, analyze and compare trips.
 
-**Known issues:** A normally closed stream does not currently provide an explicit end-of-trip completeness marker. Position-based derivatives are sensitive to numerical noise near thresholds. Scores and thresholds are illustrative, and Python and SQL score implementations should be kept consistent. Automated ground-truth tests are not yet included.
+**Known issues:** A normally closed stream does not currently provide an explicit end-of-trip completeness marker. Position-based derivatives are sensitive to numerical noise near thresholds. Scores and thresholds are illustrative. Automated ground-truth tests are not yet included.
 
 **Coming soon:** Automated validation against simulator ground truth, stronger stream-completeness checks, speed-limit context and analysis of vertical (Z-axis) motion.
 

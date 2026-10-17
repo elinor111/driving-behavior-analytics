@@ -1,15 +1,11 @@
 import numpy as np
 
-# Driving score configuration
-MIN_SCORING_DISTANCE_M = 500
-REFERENCE_EVENTS_PER_KM = 5.0
-
 
 def extract_position(cloud: np.ndarray) -> np.ndarray:
     """
     Estimate vehicle position as the point cloud centroid.
     Input: 3D coordinates in meters. Returns [x, y, z] in meters.
-    Assumes a complete, rigid point cloud with stable geometry.
+    Assumes a complete, rigid point cloud.
     """
     return cloud.mean(axis=0, dtype=np.float64)
 
@@ -85,46 +81,6 @@ def calculate_lateral_acceleration(p_heading: float | None, c_heading: float | N
     return float(speed * d_heading / dt)
 
 
-def calculate_driving_scores(rapid_count: int, braking_count: int, cornering_count: int, distance_m: float) -> dict:
-    """
-    Calculate three behavior scores and their overall average.
-    Event counts are normalized by distance (km), scores range from 0 to 100.
-    Returns None scores for trips shorter than the minimum scoring distance.
-    """
-
-    if rapid_count < 0 or braking_count < 0 or cornering_count < 0:
-        raise ValueError("Event counts cannot be negative")
-    if distance_m < 0:
-        raise ValueError("Distance cannot be negative")
-
-    if distance_m < MIN_SCORING_DISTANCE_M:
-        return {
-            "acceleration_score": None,
-            "braking_score": None,
-            "cornering_score": None,
-            "overall_score": None}
-
-    distance_km = distance_m / 1000
-
-    #  Calculate event rate per km
-    r_acc = rapid_count / distance_km
-    r_brake = braking_count / distance_km
-    r_corner = cornering_count / distance_km
-
-    # Convert event rates to scores between 0 and 100
-    s_acc = 100 * max(0, 1 - r_acc / REFERENCE_EVENTS_PER_KM)
-    s_brake = 100 * max(0, 1 - r_brake / REFERENCE_EVENTS_PER_KM)
-    s_corner = 100 * max(0, 1 - r_corner / REFERENCE_EVENTS_PER_KM)
-
-    s_overall = (s_acc + s_brake + s_corner) / 3
-
-    return {
-        "acceleration_score": s_acc,
-        "braking_score": s_brake,
-        "cornering_score": s_corner,
-        "overall_score": s_overall}
-
-
 
 class MotionProcessor:
     """ Calculate motion metrics from consecutive vehicle positions """
@@ -134,6 +90,7 @@ class MotionProcessor:
         self.previous_timestamp = None
         self.previous_speed = None
         self.previous_heading = None
+
 
     def process_position(self, position: np.ndarray, timestamp: float) -> dict:
         """ Calculate speed, acceleration, and direction from the current position and previous motion data """
@@ -168,6 +125,7 @@ class MotionProcessor:
             "heading": heading,
             "lateral_acceleration": lateral_acceleration
         }
+
 
     def process_frame(self, cloud: np.ndarray, timestamp: float) -> dict:
         """ Compatibility wrapper for processing a raw point cloud """
@@ -294,88 +252,4 @@ class EventDetector:
 
         self.events.extend(self.active_events.values())
         self.active_events.clear()
-
-
-class TripAnalyzer():
-    """ Accumulates trip metrics and generate a summary """
-
-    def __init__(self, trip_id: str):
-        self.trip_id = trip_id
-
-        self.start_time = None
-        self.end_time = None
-        self.total_distance = 0.0
-        self.max_speed = 0.0
-
-    def process_frame(self, metrics: dict):
-        """
-        Update trip statistics using motion metrics from the current frame.
-        Accumulates distance (speed * dt, in meters) and tracks maximum speed (m/s).
-        Initializes the trip start time and requires strictly increasing timestamps.
-        """
-        
-        speed = metrics["speed"]
-        timestamp = metrics["timestamp"]
-
-        # First frame: initialize trip start time
-        if self.start_time is None:
-            self.start_time = timestamp
-
-        # Calculate distance only when previous timestamp and speed exist
-        if self.end_time is not None and speed is not None:
-            dt = timestamp - self.end_time
-
-            if dt <= 0:
-                raise ValueError("Timestamps must be strictly increasing")
-
-            self.total_distance += speed * dt
-            self.max_speed = max(self.max_speed, speed)
-            
-        # Update the timestamp of the latest processed frame
-        self.end_time = timestamp
-
-    def get_summary(self, events: list[dict]) -> dict:
-        """ Return trip duration, distance and speed statistics (including events and scores) """
-
-        if self.start_time is None or self.end_time is None:
-            raise ValueError("No frames were processed")
-
-        duration = self.end_time - self.start_time
-
-        # convert from m/s to km/h
-        max_speed = self.max_speed * 3.6
-
-        if duration > 0:
-            avg_speed = (self.total_distance / duration) * 3.6
-        else:
-            avg_speed = 0
-
-        rapid_count = 0
-        braking_count = 0
-        cornering_count = 0
-
-        for event in events:
-            if event["type"] == "rapid_acceleration":
-                rapid_count += 1
-
-            elif event["type"] == "harsh_braking":
-                braking_count += 1
-
-            elif event["type"] == "hard_cornering":
-                cornering_count += 1
-
-        scores = calculate_driving_scores(rapid_count, braking_count, cornering_count, self.total_distance)
-
-        return {
-            "trip_id": self.trip_id,
-            "duration_sec": duration,
-            "distance_m": self.total_distance,
-            "avg_speed_kmh": avg_speed,
-            "max_speed_kmh": max_speed, 
-            "rapid_acceleration_count": rapid_count,
-            "harsh_braking_count": braking_count,
-            "hard_cornering_count": cornering_count,
-            **scores
-        }
-
 
