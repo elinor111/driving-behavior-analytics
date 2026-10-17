@@ -53,6 +53,24 @@ This separation allows reanalysis from stored positions without replaying point 
 
 Each frame is sent as JSON metadata followed by a binary point cloud. After the last frame, the server sends {"type": "end", "frame_count": N}. Ingestion requires this message, verifies the received count and consecutive frame IDs starting at zero, and only then allows persistence. A connection close alone does not count as successful completion.
 
+## Project Structure
+
+| File | Role |
+| --- | --- |
+| `motion.py` | Vehicle motion simulator and driving scenarios |
+| `generator.py` | Builds the per-frame point clouds |
+| `main.py` | FastAPI WebSocket source (mock VL stream) |
+| `ingest.py` | Receives and validates frames, stores positions |
+| `analyze.py` | Computes motion metrics and detects events |
+| `transform.py` | Motion calculations and event detector |
+| `database.py` | SQLite schema and inserts |
+| `sql_views.py` | `trip_summary` view (trip statistics and scores) |
+| `errors.py` | Pipeline error type with error codes |
+| `dashboard.py` | Streamlit BI dashboard |
+| `test_pipeline.py` | Automated tests |
+| `check_stream.py` | Full-size stream check |
+| `.streamlit/config.toml` | Dashboard theme |
+
 ## Setup and Usage
 **Python:** Developed and tested on Python 3.13. The code syntax requires Python 3.10+.
 
