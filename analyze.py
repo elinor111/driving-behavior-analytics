@@ -14,7 +14,8 @@ DB_PATH = Path(__file__).with_name("cloud.db")
 
 
 def load_validated_positions(conn: sqlite3.Connection, trip_id: int) -> list[tuple]:
-    """Validate stored positions before either analysis mode."""
+    """ Validate stored positions before either analysis mode """
+
     rows = conn.execute(
         """SELECT frame_id, elapsed_sec, x, y, z
            FROM frame_positions WHERE trip_id = ? ORDER BY frame_id""",
@@ -41,12 +42,14 @@ def load_validated_positions(conn: sqlite3.Connection, trip_id: int) -> list[tup
 
 
 def is_finite_number(value) -> bool:
-    """Reject NULL, text, NaN and infinity without leaking a TypeError."""
+    """ Reject NULL, text, NaN and infinity without leaking a TypeError """
+
     return isinstance(value, (int, float)) and not isinstance(value, bool) and bool(np.isfinite(value))
 
 
 def validate_metrics(rows: list[tuple]) -> None:
-    """Validate calculated or stored metrics, including expected initial NULLs."""
+    """ Validate calculated or stored metrics, including expected initial NULLs """
+
     previous_heading = None
     for index, (_, frame_id, timestamp, speed, heading, acceleration, lateral) in enumerate(rows):
         values = (speed, heading, acceleration, lateral)
@@ -69,7 +72,8 @@ def validate_metrics(rows: list[tuple]) -> None:
 
 
 def calculate_kinematics(conn: sqlite3.Connection, trip_id: int) -> list[tuple]:
-    """Compute frame metrics from validated positions without writing to the DB."""
+    """ Compute frame metrics from validated positions without writing to the DB """
+
     rows = load_validated_positions(conn, trip_id)
     processor = MotionProcessor()
     metric_rows = []
@@ -86,6 +90,7 @@ def calculate_kinematics(conn: sqlite3.Connection, trip_id: int) -> list[tuple]:
 
 def detect_driving_events(metric_rows: list[tuple], trip_id: int) -> list[tuple]:
     """ Detect events from time-ordered motion metrics """
+    
     if not metric_rows:
         raise PipelineError("VL-203", f"No motion metrics for trip {trip_id}")
 
@@ -135,6 +140,7 @@ def load_stored_metrics(conn: sqlite3.Connection, trip_id: int) -> list[tuple]:
 
 def mark_trip_failed(conn: sqlite3.Connection, trip_id: int, code: str) -> None:
     """ Persist a failure for an existing trip after prior writes are rolled back """
+    
     conn.rollback()
     with conn:
         conn.execute(
@@ -145,6 +151,7 @@ def mark_trip_failed(conn: sqlite3.Connection, trip_id: int, code: str) -> None:
 
 def analyze_trip(conn: sqlite3.Connection, trip_id: int, events_only: bool = False) -> dict:
     """ Run full analysis, or detect events from previously stored frame metrics """
+    
     if events_only:
         metric_rows = load_stored_metrics(conn, trip_id)
     else:

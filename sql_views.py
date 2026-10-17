@@ -94,6 +94,7 @@ def create_views(conn: sqlite3.Connection) -> None:
                 WHERE t.status = 'analyzed'
             ),
 
+            -- Scores: 100 * max(0, 1 - events_per_km / 5); no score below 500 m (see README)
             scored AS (
                 SELECT *,
                     CASE WHEN distance_m < 500 THEN NULL

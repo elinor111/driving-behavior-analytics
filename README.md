@@ -98,7 +98,12 @@ python analyze.py --trip 3 --events-only
 streamlit run dashboard.py
 ```
 
-The dashboard provides **Trip Analysis** (metrics, plots, events and XY trajectory) and **Driving History & Trends** (trip comparison). Data is stored in a local `cloud.db`, created during ingestion.
+The dashboard has two views, selected in the sidebar:
+
+- **Trip analysis:** key trip metrics, category scores, and three tabs: **Motion** (speed and acceleration over time, with detected events shaded and detection thresholds marked), **Trajectory** (XY path with event locations) and **Events** (table of detected events).
+- **Driving history:** all analyzed trips of the selected driver, with the driving score per trip and a comparison table.
+
+Data is stored in a local `cloud.db`, created during ingestion.
 
 ### Example warehouse query
 
@@ -128,7 +133,7 @@ Run the automated tests from the project directory:
 python -m unittest -v test_pipeline
 ```
 
-The 21 tests cover motion calculations, event detection, SQL scores, invalid inputs, repeated analysis and stream completion. Tests use in-memory databases and small inputs without modifying `cloud.db`. Full-size network performance is checked separately.
+The 21 tests cover motion calculations, event detection, SQL scores, invalid inputs, repeated analysis and stream completion. Tests use in-memory databases and small inputs without modifying `cloud.db`. Full-size streams are checked separately: with the server running, `python check_stream.py` streams the complete aggressive trip through the same validation as ingestion and prints the average frames per second.
 
 ## Error Codes
 
@@ -150,19 +155,19 @@ Expected pipeline failures produce a clear error code and a non-zero process exi
 
 An ingestion failure before persistence produces a CLI error without creating a trip. During analysis, failures for an existing trip can be recorded as `status='failed'` with an `error_code`.
 
-## Release Notes — Current Prototype
+## Release Notes — v1.0
 
 **Product:** End-to-end vehicle-location analytics with simulated point-cloud streaming, reprocessable trip data, event detection and an interactive BI dashboard.
 
 **Usage:** Follow *Setup and Usage* above to generate, analyze and compare trips.
 
-**Known issues:** The simulated data does not model sensor noise or missing points. The point cloud translates without rotating, even during turns. Driving scores and thresholds are illustrative and have not been validated against real-world driving safety. Position-based derivatives are sensitive to numerical noise near thresholds.
+**Known issues:** The simulated data does not model sensor noise or missing points. The point cloud translates without rotating, even during turns. Driving scores and thresholds are illustrative and have not been validated against real-world driving safety. Position-based derivatives are sensitive to numerical noise near thresholds. The mock source streams frames as fast as possible; timestamps simulate 16 FPS, but there is no real-time pacing.
 
 **Coming soon:** Broader validation with noisy and irregularly sampled trajectories, speed-limit context and analysis of vertical (Z-axis) motion.
 
 ## LLM Usage
 
-**Tool/model:** OpenAI ChatGPT (GPT-6).
+**Tool/model:** OpenAI ChatGPT (GPT-6)
 
 ChatGPT was used as a technical assistant during development: exploring implementation options, reviewing code, clarifying Python/SQLite/WebSocket behavior, and debugging integration issues. The development process involved comparing design alternatives, running the implementation locally, inspecting outputs, and refining the solution based on observed behavior.
 
@@ -174,5 +179,9 @@ ChatGPT was used as a technical assistant during development: exploring implemen
 - How can trip statistics be calculated in SQLite and checked against Python results?
 - How should pipeline error codes and failure handling be implemented?
 - How can Streamlit present trip metrics and comparisons clearly?
+
+**Tool/model:** Anthropic Claude (Claude Opus 5.5)
+
+Claude was used as a project reviewer during the later stages of development: for code review and dashboard styling.
 
 The resulting design choices and behavior were reviewed through local execution, debugging and automated tests with analytical expectations and simulator scenarios.

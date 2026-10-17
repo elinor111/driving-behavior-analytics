@@ -21,6 +21,7 @@ DB_PATH = Path(__file__).with_name("cloud.db")
 
 def decode_frame(metadata_message, binary, previous_frame_id, previous_timestamp):
     """ Validate a metadata/binary pair and return its extracted position """
+    
     try:
         if not isinstance(metadata_message, str) or not isinstance(binary, bytes):
             raise ValueError("Expected JSON text followed by binary data")

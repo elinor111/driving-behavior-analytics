@@ -127,21 +127,6 @@ class MotionProcessor:
         }
 
 
-    def process_frame(self, cloud: np.ndarray, timestamp: float) -> dict:
-        """ Compatibility wrapper for processing a raw point cloud """
-
-        position = extract_position(cloud)
-        metrics = self.process_position(position, timestamp)
-
-        return {
-            **metrics,
-            "x": float(position[0]),
-            "y": float(position[1]),
-            "z": float(position[2])
-        }
-
-
-
 class EventDetector:
     """ Detect consecutive frames exceeding driving-behavior thresholds """
 

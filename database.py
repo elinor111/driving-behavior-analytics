@@ -20,16 +20,6 @@ def create_tables(conn: sqlite3.Connection) -> None:
         )
     """)
 
-    existing_columns = {
-    row[1]
-    for row in conn.execute("PRAGMA table_info(trips)")
-    }
-
-    if "source_scenario" not in existing_columns:
-        conn.execute(
-            "ALTER TABLE trips ADD COLUMN source_scenario TEXT"
-        )
-
     conn.execute("""
         CREATE TABLE IF NOT EXISTS frame_positions (
             trip_id INTEGER NOT NULL,

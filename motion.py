@@ -62,18 +62,23 @@ def update_state(state, acceleration, turn_rate, dt):
     return VehicleState(new_x, new_y, new_speed, new_heading)
 
 
-def simulate_scenario(scenarios, fps=16):
+def simulate_scenario(segments, fps=16):
+    """
+    Simulate a trip from a list of motion segments, sampled at the given fps.
+    Each segment applies a constant acceleration and turn rate for its duration.
+    Returns a list of (timestamp, VehicleState), starting at rest at the origin.
+    """
     car = VehicleState(0, 0, 0, 0)
     dt = 1 / fps
 
     curr_time = 0.0
     trajectory = [(curr_time, car)]
 
-    for scenario in scenarios:
-        total_duration = scenario["duration"]
+    for segment in segments:
+        total_duration = segment["duration"]
         num_of_states = int(total_duration * fps)
-        curr_acc = scenario["acceleration"]
-        curr_turn = scenario["turn_rate"]
+        curr_acc = segment["acceleration"]
+        curr_turn = segment["turn_rate"]
 
         for _ in range(num_of_states):
             car = update_state(car, curr_acc, curr_turn, dt)
@@ -82,6 +87,9 @@ def simulate_scenario(scenarios, fps=16):
 
     return trajectory
 
+# Each scenario is a list of segments: duration (s), acceleration (m/s^2), turn_rate (rad/s).
+# Aggressive values are set clearly beyond the 3.0 m/s^2 event thresholds,
+# so detection does not depend on numerical noise at the threshold boundary.
 SCENARIOS = {
     "calm": [
         {"duration": 10, "acceleration": 1.0, "turn_rate": 0.0},

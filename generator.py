@@ -3,6 +3,11 @@ from motion import SCENARIOS, simulate_scenario
 
 
 async def gen_cloud(scenario_name="calm", fps=16):
+    """
+    Yield one translated 100x100x100 point cloud (1 cm spacing) per simulated frame.
+    Timestamps follow the given fps, but frames are produced as fast as possible
+    (no real-time pacing).
+    """
     # create the base point cloud: 1 cm spacing in meters
     grid = np.indices((100, 100, 100), dtype=np.float32)
     base_cloud = grid.reshape(3, -1).T / 100
