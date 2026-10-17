@@ -51,6 +51,8 @@ A frame contains roughly one million 3D points. Rather than storing entire cloud
 
 This separation allows reanalysis from stored positions without replaying point clouds. `--events-only` re-detects events from stored motion metrics without recalculating kinematics. The mock cloud translates without rotating, horizontal motion drives the current metrics, while Z positions are retained.
 
+Each frame is sent as JSON metadata followed by a binary point cloud. After the last frame, the server sends {"type": "end", "frame_count": N}. Ingestion requires this message, verifies the received count and consecutive frame IDs starting at zero, and only then allows persistence. A connection close alone does not count as successful completion.
+
 ## Setup and Usage
 
 Run the commands from the project directory. On Windows PowerShell:
@@ -104,8 +106,8 @@ Expected pipeline failures produce a clear error code and a non-zero process exi
 | Code | Description |
 | --- | --- |
 | `VL-101` | Cannot connect to the WebSocket source |
-| `VL-102` | Stream interrupted or closed mid-frame |
-| `VL-103` | Invalid frame metadata, sequence or payload |
+| `VL-102` | Stream closed before completion, ended mid-frame, or final frame count mismatched |
+| `VL-103` | Invalid frame metadata, sequence, payload or end-message format |
 | `VL-104` | No frames received |
 | `VL-201` | Requested trip has no stored positions |
 | `VL-202` | Invalid or non-increasing frame timestamps |
@@ -120,9 +122,9 @@ An ingestion failure before persistence produces a CLI error without creating a 
 
 **Usage:** Follow *Setup and Usage* above to generate, analyze and compare trips.
 
-**Known issues:** A normally closed stream does not currently provide an explicit end-of-trip completeness marker. Position-based derivatives are sensitive to numerical noise near thresholds. Scores and thresholds are illustrative. Automated ground-truth tests are not yet included.
+**Known issues:** Position-based derivatives are sensitive to numerical noise near thresholds. Scores and thresholds are illustrative. Automated ground-truth tests are not yet included.
 
-**Coming soon:** Automated validation against simulator ground truth, stronger stream-completeness checks, speed-limit context and analysis of vertical (Z-axis) motion.
+**Coming soon:** Automated validation against simulator ground truth, speed-limit context and analysis of vertical (Z-axis) motion.
 
 ## LLM Usage
 

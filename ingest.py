@@ -1,4 +1,4 @@
-"""Ingest vehicle-location point clouds from WebSocket into SQLite."""
+""" Ingest vehicle-location point clouds from WebSocket into SQLite """
 
 import argparse
 import asyncio
@@ -10,7 +10,7 @@ from pathlib import Path
 
 import numpy as np
 from websockets.asyncio.client import connect
-from websockets.exceptions import ConnectionClosed, ConnectionClosedOK, InvalidHandshake
+from websockets.exceptions import ConnectionClosed, InvalidHandshake
 
 from database import create_tables, save_positions
 from errors import PipelineError
@@ -20,7 +20,7 @@ DB_PATH = Path(__file__).with_name("cloud.db")
 
 
 def decode_frame(metadata_message, binary, previous_frame_id, previous_timestamp):
-    """Validate a metadata/binary pair and return its extracted position."""
+    """ Validate a metadata/binary pair and return its extracted position """
     try:
         if not isinstance(metadata_message, str) or not isinstance(binary, bytes):
             raise ValueError("Expected JSON text followed by binary data")
@@ -35,8 +35,9 @@ def decode_frame(metadata_message, binary, previous_frame_id, previous_timestamp
 
         if not isinstance(frame_id, int) or isinstance(frame_id, bool) or frame_id < 0:
             raise ValueError("Invalid frame_id")
-        if previous_frame_id is not None and frame_id != previous_frame_id + 1:
-            raise ValueError("Non-consecutive frame_id")
+        expected_frame_id = 0 if previous_frame_id is None else previous_frame_id + 1
+        if frame_id != expected_frame_id:
+            raise ValueError("Expected consecutive frame IDs starting at zero")
         if (not isinstance(timestamp, (int, float)) or isinstance(timestamp, bool)
                 or not np.isfinite(timestamp) or timestamp < 0):
             raise ValueError("Invalid timestamp")
@@ -68,7 +69,8 @@ def decode_frame(metadata_message, binary, previous_frame_id, previous_timestamp
 
 
 async def ingest_trip(scenario: str = "calm") -> dict:
-    """Receive full frames and extract positions; never save a partial stream."""
+    """ Receive full frames and extract positions, doesn't save a partial stream """
+
     url = f"ws://127.0.0.1:8000/cloud?scenario={scenario}"
     positions = []
     start = time.perf_counter()
@@ -81,10 +83,26 @@ async def ingest_trip(scenario: str = "calm") -> dict:
             while True:
                 try:
                     metadata_message = await websocket.recv()
-                except ConnectionClosedOK:
-                    break  # A normal close between complete frames.
                 except ConnectionClosed as exc:
-                    raise PipelineError("VL-102", "Stream disconnected unexpectedly") from exc
+                    raise PipelineError("VL-102", "Stream closed before the end-of-trip message") from exc
+
+                try:
+                    metadata = json.loads(metadata_message) if isinstance(metadata_message, str) else None
+                    if not isinstance(metadata, dict):
+                        raise ValueError("Expected a JSON metadata object")
+                except (ValueError, TypeError) as exc:
+                    raise PipelineError("VL-103", f"Invalid metadata: {exc}") from exc
+
+                if metadata.get("type") == "end":
+                    expected_count = metadata.get("frame_count")
+                    if type(expected_count) is not int or expected_count < 0:
+                        raise PipelineError("VL-103", "Invalid end-of-trip frame_count")
+                    if expected_count != len(positions):
+                        raise PipelineError(
+                            "VL-102",
+                            f"Incomplete trip: expected {expected_count} frames, received {len(positions)}",
+                        )
+                    break  # Explicit, verified completion; no binary payload follows.
 
                 try:
                     binary = await websocket.recv()

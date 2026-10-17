@@ -12,7 +12,7 @@ class VehicleState:
 
 def update_state(state, acceleration, turn_rate, dt): 
     """
-    Update the vehicle's position, speed, and heading over one time step.
+     Update the vehicle's position, speed, and heading over one time step.
 
     Args:
         state (VehicleState): Current vehicle state.
@@ -34,8 +34,10 @@ def update_state(state, acceleration, turn_rate, dt):
         - Speed and heading change linearly during the step.
         - Position is approximated using average speed and heading.
         - Vehicle orientation and physical dynamics are not modeled.
-        - The current implementation assumes speed remains
-          non-negative; stopping behavior is not yet handled.
+        - If braking would make speed negative, distance is integrated
+          only until the vehicle stops. the final speed is clamped to zero.
+        - Heading still advances over the full time step, turning while
+          stopping is a simplified approximation.
     """
 
     # Update speed

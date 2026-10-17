@@ -17,6 +17,7 @@ async def stream_cloud(websocket: WebSocket):
         )
         return
 
+    frame_count = 0 
     try:
         async for frame in gen_cloud(scenario):
             metadata = {
@@ -29,8 +30,10 @@ async def stream_cloud(websocket: WebSocket):
 
             await websocket.send_json(metadata)
             await websocket.send_bytes(frame["points"].tobytes())  # change from numpy array to bytes format
+            frame_count += 1
 
-        # all frames were sent successfully
+        # sent only after the generator finishes normally
+        await websocket.send_json({"type": "end", "frame_count": frame_count})
         await websocket.close(code=1000)
 
     except WebSocketDisconnect:
