@@ -54,6 +54,7 @@ This separation allows reanalysis from stored positions without replaying point 
 Each frame is sent as JSON metadata followed by a binary point cloud. After the last frame, the server sends {"type": "end", "frame_count": N}. Ingestion requires this message, verifies the received count and consecutive frame IDs starting at zero, and only then allows persistence. A connection close alone does not count as successful completion.
 
 ## Setup and Usage
+**Python:** Developed and tested on Python 3.13. The code syntax requires Python 3.10+.
 
 Run the commands from the project directory. On Windows PowerShell:
 
@@ -99,6 +100,36 @@ streamlit run dashboard.py
 
 The dashboard provides **Trip Analysis** (metrics, plots, events and XY trajectory) and **Driving History & Trends** (trip comparison). Data is stored in a local `cloud.db`, created during ingestion.
 
+### Example warehouse query
+
+After analysis, `trip_summary` can be queried directly in SQLite. For example, compare analyzed trips by driving score:
+
+```sql
+SELECT
+    trip_id,
+    driver_id,
+    ROUND(distance_m / 1000.0, 2) AS distance_km,
+    rapid_acceleration_count,
+    harsh_braking_count,
+    hard_cornering_count,
+    ROUND(overall_score, 1) AS overall_score
+FROM trip_summary
+WHERE overall_score IS NOT NULL
+ORDER BY overall_score DESC;
+```
+
+## Validation and Tests
+
+Before analysis, stored data is checked for at least three frames, consecutive frame IDs, increasing timestamps and finite coordinates. Motion metrics are checked for valid values, allowing expected missing values at startup or while stationary.
+
+Run the automated tests from the project directory:
+
+```powershell
+python -m unittest -v test_pipeline
+```
+
+The 21 tests cover motion calculations, event detection, SQL scores, invalid inputs, repeated analysis and stream completion. Tests use in-memory databases and small inputs without modifying `cloud.db`. Full-size network performance is checked separately.
+
 ## Error Codes
 
 Expected pipeline failures produce a clear error code and a non-zero process exit status.
@@ -112,6 +143,9 @@ Expected pipeline failures produce a clear error code and a non-zero process exi
 | `VL-201` | Requested trip has no stored positions |
 | `VL-202` | Invalid or non-increasing frame timestamps |
 | `VL-203` | Missing or incomplete metrics for event-only analysis |
+| `VL-204` | Fewer than three frames for analysis |
+| `VL-205` | Invalid stored coordinates or frame sequence |
+| `VL-206` | Invalid or unexpectedly missing motion metrics |
 | `VL-301` | SQLite operation failed |
 
 An ingestion failure before persistence produces a CLI error without creating a trip. During analysis, failures for an existing trip can be recorded as `status='failed'` with an `error_code`.
@@ -122,9 +156,9 @@ An ingestion failure before persistence produces a CLI error without creating a 
 
 **Usage:** Follow *Setup and Usage* above to generate, analyze and compare trips.
 
-**Known issues:** Position-based derivatives are sensitive to numerical noise near thresholds. Scores and thresholds are illustrative. Automated ground-truth tests are not yet included.
+**Known issues:** The simulated data does not model sensor noise or missing points. The point cloud translates without rotating, even during turns. Driving scores and thresholds are illustrative and have not been validated against real-world driving safety. Position-based derivatives are sensitive to numerical noise near thresholds.
 
-**Coming soon:** Automated validation against simulator ground truth, speed-limit context and analysis of vertical (Z-axis) motion.
+**Coming soon:** Broader validation with noisy and irregularly sampled trajectories, speed-limit context and analysis of vertical (Z-axis) motion.
 
 ## LLM Usage
 
@@ -141,4 +175,4 @@ ChatGPT was used as a technical assistant during development: exploring implemen
 - How should pipeline error codes and failure handling be implemented?
 - How can Streamlit present trip metrics and comparisons clearly?
 
-The resulting design choices and behavior were reviewed through local execution and debugging; automated regression and ground-truth validation are planned.
+The resulting design choices and behavior were reviewed through local execution, debugging and automated tests with analytical expectations and simulator scenarios.

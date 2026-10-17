@@ -13,8 +13,8 @@ from sql_views import create_views
 DB_PATH = Path(__file__).with_name("cloud.db")
 
 
-def calculate_kinematics(conn: sqlite3.Connection, trip_id: int) -> list[tuple]:
-    """ Compute frame metrics from saved positions, without writing to the DB """
+def load_validated_positions(conn: sqlite3.Connection, trip_id: int) -> list[tuple]:
+    """Validate stored positions before either analysis mode."""
     rows = conn.execute(
         """SELECT frame_id, elapsed_sec, x, y, z
            FROM frame_positions WHERE trip_id = ? ORDER BY frame_id""",
@@ -23,12 +23,54 @@ def calculate_kinematics(conn: sqlite3.Connection, trip_id: int) -> list[tuple]:
     if not rows:
         raise PipelineError("VL-201", f"No stored positions for trip {trip_id}")
 
-    timestamps = [row[1] for row in rows]
-    if any(not np.isfinite(t) for t in timestamps) or any(
-        later <= earlier for earlier, later in zip(timestamps, timestamps[1:])
-    ):
-        raise PipelineError("VL-202", f"Non-increasing or invalid timestamps for trip {trip_id}")
+    if len(rows) < 3:
+        raise PipelineError("VL-204", f"Trip {trip_id}: at least three frames are required")
 
+    for index, (frame_id, timestamp, x, y, z) in enumerate(rows):
+        if frame_id != index:
+            raise PipelineError("VL-205", "Frame IDs must be consecutive and start at zero")
+        if not is_finite_number(timestamp) or timestamp < 0:
+            raise PipelineError("VL-202", f"Invalid timestamp in frame {frame_id}")
+        if index:
+            dt = timestamp - rows[index - 1][1]
+            if not np.isfinite(dt) or dt <= 0:
+                raise PipelineError("VL-202", "Timestamps must strictly increase")
+        if not all(is_finite_number(value) for value in (x, y, z)):
+            raise PipelineError("VL-205", f"Invalid coordinates in frame {frame_id}")
+    return rows
+
+
+def is_finite_number(value) -> bool:
+    """Reject NULL, text, NaN and infinity without leaking a TypeError."""
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and bool(np.isfinite(value))
+
+
+def validate_metrics(rows: list[tuple]) -> None:
+    """Validate calculated or stored metrics, including expected initial NULLs."""
+    previous_heading = None
+    for index, (_, frame_id, timestamp, speed, heading, acceleration, lateral) in enumerate(rows):
+        values = (speed, heading, acceleration, lateral)
+        if any(value is not None and not is_finite_number(value) for value in values):
+            raise PipelineError("VL-206", f"Non-finite or non-numeric metric in frame {frame_id}")
+        if index == 0:
+            valid = all(value is None for value in values)
+        else:
+            valid = speed is not None and speed >= 0
+            valid = valid and ((acceleration is None) if index == 1 else (acceleration is not None))
+            # A heading is undefined only for a stationary/nearly stationary step.
+            dt = timestamp - rows[index - 1][2]
+            if speed is not None:
+                valid = valid and ((heading is None) == (speed * dt < 1e-5))
+            needs_lateral = previous_heading is not None and heading is not None
+            valid = valid and ((lateral is not None) == needs_lateral)
+        if not valid:
+            raise PipelineError("VL-206", f"Missing or inconsistent metric in frame {frame_id}")
+        previous_heading = heading
+
+
+def calculate_kinematics(conn: sqlite3.Connection, trip_id: int) -> list[tuple]:
+    """Compute frame metrics from validated positions without writing to the DB."""
+    rows = load_validated_positions(conn, trip_id)
     processor = MotionProcessor()
     metric_rows = []
     for frame_id, timestamp, x, y, z in rows:
@@ -38,6 +80,7 @@ def calculate_kinematics(conn: sqlite3.Connection, trip_id: int) -> list[tuple]:
             trip_id, frame_id, timestamp, metrics["speed"], metrics["heading"],
             metrics["acceleration"], metrics["lateral_acceleration"],
         ))
+    validate_metrics(metric_rows)
     return metric_rows
 
 
@@ -69,6 +112,7 @@ def detect_driving_events(metric_rows: list[tuple], trip_id: int) -> list[tuple]
 def load_stored_metrics(conn: sqlite3.Connection, trip_id: int) -> list[tuple]:
     """ Read previously calculated metrics, do not recompute kinematics """
 
+    positions = load_validated_positions(conn, trip_id)
     rows = conn.execute(
         """SELECT m.trip_id, m.frame_id, p.elapsed_sec, m.speed_mps,
                   m.heading, m.acceleration_mps2, m.lateral_acceleration_mps2
@@ -78,20 +122,14 @@ def load_stored_metrics(conn: sqlite3.Connection, trip_id: int) -> list[tuple]:
            WHERE m.trip_id = ? ORDER BY m.frame_id""",
         (trip_id,),
     ).fetchall()
-    expected = conn.execute(
-        "SELECT COUNT(*) FROM frame_positions WHERE trip_id = ?", (trip_id,)
-    ).fetchone()[0]
+    expected = len(positions)
     if not expected or len(rows) != expected:
         raise PipelineError(
             "VL-203",
             f"Trip {trip_id}: expected {expected} metrics, found {len(rows)}. "
             "Run full analysis first."
         )
-    timestamps = [row[2] for row in rows]
-    if any(not np.isfinite(t) for t in timestamps) or any(
-        later <= earlier for earlier, later in zip(timestamps, timestamps[1:])
-    ):
-        raise PipelineError("VL-202", f"Non-increasing or invalid timestamps for trip {trip_id}")
+    validate_metrics(rows)
     return rows
 
 

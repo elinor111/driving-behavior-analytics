@@ -8,11 +8,20 @@ DB_PATH = Path(__file__).with_name("cloud.db")
 
 
 def load_trips() -> pd.DataFrame:
-    """ Load saved trip summaries from SQLite """
+    """Load summaries, or return an empty result before the first analysis."""
+
+    if not DB_PATH.is_file():
+        return pd.DataFrame()
 
     conn = sqlite3.connect(DB_PATH)
 
     try:
+        summary_exists = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'view' AND name = 'trip_summary'"
+        ).fetchone()
+        if summary_exists is None:
+            return pd.DataFrame()
+
         trips = pd.read_sql_query(
             """
             SELECT *
